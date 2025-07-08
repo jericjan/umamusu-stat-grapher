@@ -65,6 +65,8 @@ bars = ax.bar(labels, [0]*5, color="skyblue")
 ax.set_title("Stat Overview")
 ax.set_ylabel("Value")
 
+saved_stats = [0, 0, 0, 0, 0]
+
 # --- Start loop ---
 with mss.mss() as sct:
     while True:
@@ -108,6 +110,12 @@ with mss.mss() as sct:
                     value = 0
                 stats.append(value)
 
+
+            if any(x == 0 for x in stats) or stats == saved_stats:
+                plt.pause(1.0)
+                continue
+                
+            saved_stats = stats
             # Update plot
             for bar, stat in zip(bars, stats):
                 bar.set_height(stat)
@@ -129,7 +137,7 @@ with mss.mss() as sct:
                     fontweight='bold'
                 )
 
-            plt.pause(1.0)
+            plt.pause(0.1)
 
         except KeyboardInterrupt:
             print("Stopped by user.")
