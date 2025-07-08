@@ -66,7 +66,6 @@ for i, (x, y, bw, bh) in enumerate(boxes):
     config = "--psm 6 -c tessedit_char_whitelist=0123456789"
     text = pytesseract.image_to_string(img_for_ocr, config=config).strip()
 
-    # Fallback in case OCR fails
     try:
         value = int(text)
     except ValueError:
@@ -76,8 +75,20 @@ for i, (x, y, bw, bh) in enumerate(boxes):
 
 # Plot using matplotlib
 plt.figure(figsize=(8, 4))
-plt.bar(labels, stats, color="skyblue")
-plt.ylim(0, 1200)
+bars = plt.bar(labels, stats, color="skyblue")
 plt.title("Stat Overview")
 plt.ylabel("Value")
+
+# Add value labels on top of each bar
+for bar, stat in zip(bars, stats):
+    plt.text(
+        bar.get_x() + bar.get_width() / 2,
+        bar.get_height(),
+        str(stat),
+        ha='center',
+        va='bottom',
+        fontsize=10,
+        fontweight='bold'
+    )
+
 plt.show()
