@@ -6,13 +6,13 @@ from PIL import Image
 from io import BytesIO
 import win32gui
 import win32process
-import win32con
 import psutil
 import mss
+import time
 
 pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 
-process_name = "UmamusumePrettyDerby.exe"  # <-- Change this to your game process name
+process_name = "UmamusumePrettyDerby.exe"  # <-- Change this
 
 # --- Find window handle by process name ---
 def get_hwnd_by_process_name(proc_name):
@@ -35,36 +35,20 @@ hwnd = get_hwnd_by_process_name(process_name)
 if hwnd is None:
     raise Exception(f"Window for process '{process_name}' not found!")
 
-# Get window rect
+# --- Get window rect ---
 left, top, right, bottom = win32gui.GetWindowRect(hwnd)
 width = right - left
 height = bottom - top
 
-# --- Take screenshot of window ---
-with mss.mss() as sct:
-    monitor = {"left": left, "top": top, "width": width, "height": height}
-    sct_img = sct.grab(monitor)
-    img_cv = np.array(sct_img)
-    img_cv = cv2.cvtColor(img_cv, cv2.COLOR_BGRA2BGR)  # Convert to BGR
-
-# --- Load template ---
+# --- Load template once ---
 template = cv2.imread("template.png")
 if template is None:
     raise ValueError("Template image not found!")
 
-full_gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
 template_gray = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY)
-
-# Template matching
-res = cv2.matchTemplate(full_gray, template_gray, cv2.TM_CCOEFF_NORMED)
-_, max_val, _, max_loc = cv2.minMaxLoc(res)
-
 h, w = template_gray.shape
-top_left = max_loc
-bottom_right = (top_left[0] + w, top_left[1] + h)
-cropped = img_cv[top_left[1]:bottom_right[1], top_left[0]:bottom_right[0]]
 
-# --- Define stat bounding boxes ---
+# --- Define bounding boxes ---
 boxes = [
     (41, 27, 59, 26),    # Speed
     (137, 26, 57, 27),   # Stamina
@@ -73,42 +57,83 @@ boxes = [
     (422, 27, 56, 26)    # Wit
 ]
 labels = ["Speed", "Stamina", "Power", "Guts", "Wit"]
-stats = []
 
-for i, (x, y, bw, bh) in enumerate(boxes):
-    stat_crop = cropped[y:y+bh, x:x+bw]
-    pil_img = Image.fromarray(cv2.cvtColor(stat_crop, cv2.COLOR_BGR2RGB))
+# --- Setup matplotlib ---
+plt.ion()
+fig, ax = plt.subplots(figsize=(8, 4))
+bars = ax.bar(labels, [0]*5, color="skyblue")
+ax.set_title("Stat Overview")
+ax.set_ylabel("Value")
 
-    # BytesIO buffer
-    buffer = BytesIO()
-    pil_img.save(buffer, format="PNG")
-    buffer.seek(0)
-    img_for_ocr = Image.open(buffer)
+# --- Start loop ---
+with mss.mss() as sct:
+    while True:
+        try:
+            # Update window rect each time in case it moves
+            left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+            width = right - left
+            height = bottom - top
 
-    config = "--psm 6 -c tessedit_char_whitelist=0123456789"
-    text = pytesseract.image_to_string(img_for_ocr, config=config).strip()
+            monitor = {"left": left, "top": top, "width": width, "height": height}
+            sct_img = sct.grab(monitor)
 
-    try:
-        value = int(text)
-    except ValueError:
-        value = 0
-    stats.append(value)
+            img_cv = np.array(sct_img)
+            img_cv = cv2.cvtColor(img_cv, cv2.COLOR_BGRA2BGR)
 
-# --- Plot ---
-plt.figure(figsize=(8, 4))
-bars = plt.bar(labels, stats, color="skyblue")
-plt.title("Stat Overview")
-plt.ylabel("Value")
+            full_gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
+            res = cv2.matchTemplate(full_gray, template_gray, cv2.TM_CCOEFF_NORMED)
+            _, max_val, _, max_loc = cv2.minMaxLoc(res)
 
-for bar, stat in zip(bars, stats):
-    plt.text(
-        bar.get_x() + bar.get_width() / 2,
-        bar.get_height(),
-        str(stat),
-        ha='center',
-        va='bottom',
-        fontsize=10,
-        fontweight='bold'
-    )
+            top_left = max_loc
+            bottom_right = (top_left[0] + w, top_left[1] + h)
+            cropped = img_cv[top_left[1]:bottom_right[1], top_left[0]:bottom_right[0]]
 
+            stats = []
+
+            for i, (x, y, bw, bh) in enumerate(boxes):
+                stat_crop = cropped[y:y+bh, x:x+bw]
+                pil_img = Image.fromarray(cv2.cvtColor(stat_crop, cv2.COLOR_BGR2RGB))
+
+                buffer = BytesIO()
+                pil_img.save(buffer, format="PNG")
+                buffer.seek(0)
+                img_for_ocr = Image.open(buffer)
+
+                config = "--psm 6 -c tessedit_char_whitelist=0123456789"
+                text = pytesseract.image_to_string(img_for_ocr, config=config).strip()
+
+                try:
+                    value = int(text)
+                except ValueError:
+                    value = 0
+                stats.append(value)
+
+            # Update plot
+            for bar, stat in zip(bars, stats):
+                bar.set_height(stat)
+
+            ax.clear()
+            bars = ax.bar(labels, stats, color="skyblue")
+            ax.set_title("Stat Overview")
+            ax.set_ylabel("Value")
+
+            # Add text labels
+            for bar, stat in zip(bars, stats):
+                ax.text(
+                    bar.get_x() + bar.get_width() / 2,
+                    bar.get_height(),
+                    str(stat),
+                    ha='center',
+                    va='bottom',
+                    fontsize=10,
+                    fontweight='bold'
+                )
+
+            plt.pause(1.0)
+
+        except KeyboardInterrupt:
+            print("Stopped by user.")
+            break
+
+plt.ioff()
 plt.show()
