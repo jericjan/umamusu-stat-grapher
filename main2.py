@@ -11,19 +11,26 @@ import mss
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-
 pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 
 process_name = "UmamusumePrettyDerby.exe"
 
 def ocr_single_stat(image_array):
-    pil_img = Image.fromarray(cv2.cvtColor(image_array, cv2.COLOR_BGR2RGB))
+
+    # Convert to grayscale
+    gray = cv2.cvtColor(image_array, cv2.COLOR_BGR2GRAY)
+
+    # Apply thresholding
+    _, thresh = cv2.threshold(gray, 140, 255, cv2.THRESH_TOZERO)
+    # Convert back to PIL for pytesseract
+    pil_img = Image.fromarray(thresh)
+
     buffer = BytesIO()
     pil_img.save(buffer, format="PNG")
     buffer.seek(0)
     img_for_ocr = Image.open(buffer)
 
-    config = "--psm 8 -c tessedit_char_whitelist=0123456789"
+    config = "--psm 7 -c tessedit_char_whitelist=0123456789"
     text = pytesseract.image_to_string(img_for_ocr, config=config).strip()
     try:
         value = int(text)
