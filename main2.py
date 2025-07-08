@@ -9,11 +9,27 @@ import win32process
 import psutil
 import mss
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 
 pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 
 process_name = "UmamusumePrettyDerby.exe"
+
+def ocr_single_stat(image_array):
+    pil_img = Image.fromarray(cv2.cvtColor(image_array, cv2.COLOR_BGR2RGB))
+    buffer = BytesIO()
+    pil_img.save(buffer, format="PNG")
+    buffer.seek(0)
+    img_for_ocr = Image.open(buffer)
+
+    config = "--psm 8 -c tessedit_char_whitelist=0123456789"
+    text = pytesseract.image_to_string(img_for_ocr, config=config).strip()
+    try:
+        value = int(text)
+    except ValueError:
+        value = 0
+    return value
 
 def get_hwnd_by_process_name(proc_name):
     hwnds = []
@@ -84,30 +100,25 @@ with mss.mss() as sct:
             # --- Template match
             full_gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
             res = cv2.matchTemplate(full_gray, template_gray, cv2.TM_CCOEFF_NORMED)
-            _, max_val, _, max_loc = cv2.minMaxLoc(res)
+            _, max_val, _, max_loc = cv2.minMaxLoc(res)            
+            if max_val < 0.8:
+                plt.pause(1.0)
+                continue
             top_left = max_loc
             bottom_right = (top_left[0] + w, top_left[1] + h)
             cropped = img_cv[top_left[1]:bottom_right[1], top_left[0]:bottom_right[0]]
             t2 = time.perf_counter()
 
             # --- OCR
-            stats = []
-            for i, (x, y, bw, bh) in enumerate(boxes):
-                stat_crop = cropped[y:y+bh, x:x+bw]
-                pil_img = Image.fromarray(cv2.cvtColor(stat_crop, cv2.COLOR_BGR2RGB))
-                buffer = BytesIO()
-                pil_img.save(buffer, format="PNG")
-                buffer.seek(0)
-                img_for_ocr = Image.open(buffer)
+            with ThreadPoolExecutor(max_workers=5) as executor:
+                futures = []
+                for i, (x, y, bw, bh) in enumerate(boxes):
+                    stat_crop = cropped[y:y+bh, x:x+bw]
+                    futures.append(executor.submit(ocr_single_stat, stat_crop))
 
-                config = "--psm 8 -c tessedit_char_whitelist=0123456789"
-                text = pytesseract.image_to_string(img_for_ocr, config=config).strip()
-
-                try:
-                    value = int(text)
-                except ValueError:
-                    value = 0
-                stats.append(value)
+                stats = [f.result() for f in futures]
+                
+                
             t3 = time.perf_counter()
 
             if any(x == 0 for x in stats) or stats == saved_stats:
