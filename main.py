@@ -1,42 +1,69 @@
 import cv2
 import numpy as np
-import pytesseract
 import matplotlib.pyplot as plt
 from PIL import Image
-from io import BytesIO
 import win32gui
 import win32process
 import psutil
 import mss
 import time
-from concurrent.futures import ThreadPoolExecutor
+import os
+import google.generativeai as genai
+from dotenv import load_dotenv
+import keyboard  # Import the keyboard library
 
-pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+load_dotenv()
+
+# --- Gemini API Configuration ---
+# IMPORTANT: Set your GOOGLE_API_KEY environment variable before running.
+# You can get a free API key from Google AI Studio: https://aistudio.google.com/
+try:
+    genai.configure(api_key=os.environ["GOOGLE_API_KEY"])
+except KeyError:
+    raise Exception("GOOGLE_API_KEY environment variable not set. Please get a key and set it.")
+
+# Initialize the Gemini model
+# Using 'gemini-1.5-flash' is recommended for speed and cost-effectiveness.
+vision_model = genai.GenerativeModel('gemma-3-27b-it')
+# -----------------------------
 
 process_name = "UmamusumePrettyDerby.exe"
 
-def ocr_single_stat(image_array):
+def get_stats_with_gemini(image_array):
+    """
+    Sends an image to the Gemini API and extracts the stat values.
+    """
+    # Convert the OpenCV image (NumPy array) to a PIL Image
+    pil_img = Image.fromarray(cv2.cvtColor(image_array, cv2.COLOR_BGR2RGB))
 
-    # Convert to grayscale
-    gray = cv2.cvtColor(image_array, cv2.COLOR_BGR2GRAY)
+    prompt = """
+    You are an expert OCR system for the game Umamusume Pretty Derby.
+    Analyze this image of the stats bar.
+    Extract the five numerical stat values in this exact order: Speed, Stamina, Power, Guts, Wit.
+    Provide ONLY a comma-separated list of the five numbers.
+    Example output: 157,91,121,100,125
+    """
 
-    # Apply thresholding
-    _, thresh = cv2.threshold(gray, 140, 255, cv2.THRESH_TOZERO)
-    # Convert back to PIL for pytesseract
-    pil_img = Image.fromarray(thresh)
-
-    buffer = BytesIO()
-    pil_img.save(buffer, format="PNG")
-    buffer.seek(0)
-    img_for_ocr = Image.open(buffer)
-
-    config = "--psm 7 -c tessedit_char_whitelist=0123456789"
-    text = pytesseract.image_to_string(img_for_ocr, config=config).strip()
     try:
-        value = int(text)
-    except ValueError:
-        value = 0
-    return value
+        # Generate content using the model
+        response = vision_model.generate_content([prompt, pil_img])
+        
+        # Clean up the response and parse it
+        stats_text = response.text.strip()
+        stats = [int(s.strip()) for s in stats_text.split(',')]
+
+        # Validate that we got exactly 5 stats
+        if len(stats) != 5:
+            print(f"Error: Gemini returned {len(stats)} values, expected 5. Response: '{stats_text}'")
+            return [0, 0, 0, 0, 0] # Return a default value on error
+
+        return stats
+
+    except Exception as e:
+        print(f"An error occurred during the Gemini API call: {e}")
+        # In case of API error or parsing failure, return a default/failure value
+        return [0, 0, 0, 0, 0]
+
 
 def get_hwnd_by_process_name(proc_name):
     hwnds = []
@@ -71,13 +98,6 @@ if template is None:
 template_gray = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY)
 h, w = template_gray.shape
 
-boxes = [
-    (41, 27, 59, 26),    # Speed
-    (137, 26, 57, 27),   # Stamina
-    (224, 27, 64, 26),   # Power
-    (320, 26, 63, 27),   # Guts
-    (422, 27, 56, 26)    # Wit
-]
 labels = ["Speed", "Stamina", "Power", "Guts", "Wit"]
 
 plt.ion()
@@ -92,88 +112,90 @@ with mss.mss() as sct:
         try:
             loop_start = time.perf_counter()
 
-            # --- Screenshot
-            t0 = time.perf_counter()
-            left, top, right, bottom = win32gui.GetWindowRect(hwnd)
-            width = right - left
-            height = bottom - top
+            # Check for numpad 0 key press
+            if keyboard.is_pressed('0'):
+                print("Numpad 0 pressed. Triggering Gemini call.")
 
-            monitor = {"left": left, "top": top, "width": width, "height": height}
-            sct_img = sct.grab(monitor)
-            img_cv = np.array(sct_img)
-            img_cv = cv2.cvtColor(img_cv, cv2.COLOR_BGRA2BGR)
-            t1 = time.perf_counter()
+                # --- Screenshot
+                t0 = time.perf_counter()
+                left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+                width = right - left
+                height = bottom - top
 
-            # --- Template match
-            full_gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
-            res = cv2.matchTemplate(full_gray, template_gray, cv2.TM_CCOEFF_NORMED)
-            _, max_val, _, max_loc = cv2.minMaxLoc(res)            
-            if max_val < 0.7:
-                plt.pause(1.0)
-                continue
-            top_left = max_loc
-            bottom_right = (top_left[0] + w, top_left[1] + h)
-            cropped = img_cv[top_left[1]:bottom_right[1], top_left[0]:bottom_right[0]]
-            t2 = time.perf_counter()
+                monitor = {"left": left, "top": top, "width": width, "height": height}
+                sct_img = sct.grab(monitor)
+                img_cv = np.array(sct_img)
+                img_cv = cv2.cvtColor(img_cv, cv2.COLOR_BGRA2BGR)
+                t1 = time.perf_counter()
 
-            # --- OCR
-            with ThreadPoolExecutor(max_workers=5) as executor:
-                futures = []
-                for i, (x, y, bw, bh) in enumerate(boxes):
-                    stat_crop = cropped[y:y+bh, x:x+bw]
-                    futures.append(executor.submit(ocr_single_stat, stat_crop))
+                # --- Template match
+                full_gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
+                res = cv2.matchTemplate(full_gray, template_gray, cv2.TM_CCOEFF_NORMED)
+                _, max_val, _, max_loc = cv2.minMaxLoc(res)
+                if max_val < 0.7:
+                    plt.pause(1.0)
+                    continue
+                print("Template match!")
+                top_left = max_loc
+                bottom_right = (top_left[0] + w, top_left[1] + h)
+                cropped = img_cv[top_left[1]:bottom_right[1], top_left[0]:bottom_right[0]]
+                t2 = time.perf_counter()
 
-                stats = [f.result() for f in futures]
-                
-                
-            t3 = time.perf_counter()
+                # --- Get stats using Gemini Vision API ---
+                stats = get_stats_with_gemini(cropped)
+                print("Gemini call done")
+                print(stats)
+                t3 = time.perf_counter()
+                # ----------------------------------------
 
-            if any(x == 0 for x in stats) or stats == saved_stats:
-                plt.pause(1.0)
-                continue
+                if stats == saved_stats or sum(stats) == 0:
+                    plt.pause(1.0)
+                    continue
+                print("stat changed")
+                saved_stats = stats
 
-            saved_stats = stats
+                # --- Plot
+                stats_no_guts = stats.copy()
+                stats_no_guts[3] = 0
 
-            # --- Plot
-            stats_no_guts = stats.copy()
-            stats_no_guts[3] = 0
+                ax.clear()
+                ax2.clear()
 
-            ax.clear()
-            ax2.clear()
+                bars1 = ax.bar(labels, stats, color="skyblue", label="Original")
+                bars2 = ax2.bar(labels, stats_no_guts, color="orange", alpha=0.5, label="Without Guts")
 
-            bars1 = ax.bar(labels, stats, color="skyblue", label="Original")
-            bars2 = ax2.bar(labels, stats_no_guts, color="orange", alpha=0.5, label="Without Guts")
+                ax.set_title("Umamusume Stats Graph")
+                ax.set_ylabel("Original Stats")
+                ax2.set_ylabel("No Guts Stats")
 
-            ax.set_title("Umamusume Stats Graph")
-            ax.set_ylabel("Original Stats")
-            ax2.set_ylabel("No Guts Stats")
+                non_guts_indices = [0, 1, 2, 4]
+                non_guts_values = [stats[i] for i in non_guts_indices]
+                min_non_guts_value = min(non_guts_values) if non_guts_values else 0
+                ax2.set_ylim(bottom=min_non_guts_value)
 
-            non_guts_indices = [0, 1, 2, 4]
-            non_guts_values = [stats[i] for i in non_guts_indices]
-            min_non_guts_value = min(non_guts_values)
-            ax2.set_ylim(bottom=min_non_guts_value)
+                ax.legend(loc="upper left")
+                ax2.legend(loc="upper right")
 
-            ax.legend(loc="upper left")
-            ax2.legend(loc="upper right")
+                for bar, stat in zip(bars1, stats):
+                    ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height(), str(stat),
+                            ha='center', va='bottom', fontsize=9, fontweight='bold')
+                for bar, stat in zip(bars2, stats_no_guts):
+                    ax2.text(bar.get_x() + bar.get_width() / 2, bar.get_height(), str(stat),
+                             ha='center', va='bottom', fontsize=8)
 
-            for bar, stat in zip(bars1, stats):
-                ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height(), str(stat),
-                        ha='center', va='bottom', fontsize=9, fontweight='bold')
-            for bar, stat in zip(bars2, stats_no_guts):
-                ax2.text(bar.get_x() + bar.get_width() / 2, bar.get_height(), str(stat),
-                         ha='center', va='bottom', fontsize=8)
+                plt.pause(0.1)
+                t4 = time.perf_counter()
 
-            plt.pause(0.1)
-            t4 = time.perf_counter()
+                loop_end = time.perf_counter()
 
-            loop_end = time.perf_counter()
-
-            # --- Print timings
-            print(f"Loop total: {(loop_end - loop_start)*1000:.1f} ms | "
-                  f"Screenshot: {(t1 - t0)*1000:.1f} ms | "
-                  f"Template: {(t2 - t1)*1000:.1f} ms | "
-                  f"OCR: {(t3 - t2)*1000:.1f} ms | "
-                  f"Plot: {(t4 - t3)*1000:.1f} ms")
+                # --- Print timings
+                print(f"Loop total: {(loop_end - loop_start)*1000:.1f} ms | "
+                      f"Screenshot: {(t1 - t0)*1000:.1f} ms | "
+                      f"Template: {(t2 - t1)*1000:.1f} ms | "
+                      f"Gemini: {(t3 - t2)*1000:.1f} ms | " # Changed label from OCR
+                      f"Plot: {(t4 - t3)*1000:.1f} ms")
+            else:
+                plt.pause(0.1)  # Small pause if the key isn't pressed
 
         except KeyboardInterrupt:
             print("Stopped by user.")
