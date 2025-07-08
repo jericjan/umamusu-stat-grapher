@@ -8,6 +8,8 @@ import win32gui
 import win32process
 import psutil
 import mss
+import time
+
 
 pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 
@@ -61,39 +63,44 @@ ax2 = ax.twinx()  # Second y-axis
 
 saved_stats = [0, 0, 0, 0, 0]
 
+# Start loop
 with mss.mss() as sct:
     while True:
         try:
+            loop_start = time.perf_counter()
+
+            # --- Screenshot
+            t0 = time.perf_counter()
             left, top, right, bottom = win32gui.GetWindowRect(hwnd)
             width = right - left
             height = bottom - top
 
             monitor = {"left": left, "top": top, "width": width, "height": height}
             sct_img = sct.grab(monitor)
-
             img_cv = np.array(sct_img)
             img_cv = cv2.cvtColor(img_cv, cv2.COLOR_BGRA2BGR)
+            t1 = time.perf_counter()
 
+            # --- Template match
             full_gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
             res = cv2.matchTemplate(full_gray, template_gray, cv2.TM_CCOEFF_NORMED)
             _, max_val, _, max_loc = cv2.minMaxLoc(res)
-
             top_left = max_loc
             bottom_right = (top_left[0] + w, top_left[1] + h)
             cropped = img_cv[top_left[1]:bottom_right[1], top_left[0]:bottom_right[0]]
+            t2 = time.perf_counter()
 
+            # --- OCR
             stats = []
-
             for i, (x, y, bw, bh) in enumerate(boxes):
                 stat_crop = cropped[y:y+bh, x:x+bw]
                 pil_img = Image.fromarray(cv2.cvtColor(stat_crop, cv2.COLOR_BGR2RGB))
-
                 buffer = BytesIO()
                 pil_img.save(buffer, format="PNG")
                 buffer.seek(0)
                 img_for_ocr = Image.open(buffer)
 
-                config = "--psm 6 -c tessedit_char_whitelist=0123456789"
+                config = "--psm 8 -c tessedit_char_whitelist=0123456789"
                 text = pytesseract.image_to_string(img_for_ocr, config=config).strip()
 
                 try:
@@ -101,6 +108,7 @@ with mss.mss() as sct:
                 except ValueError:
                     value = 0
                 stats.append(value)
+            t3 = time.perf_counter()
 
             if any(x == 0 for x in stats) or stats == saved_stats:
                 plt.pause(1.0)
@@ -108,44 +116,46 @@ with mss.mss() as sct:
 
             saved_stats = stats
 
-            # Stats with Guts set to 0
+            # --- Plot
             stats_no_guts = stats.copy()
             stats_no_guts[3] = 0
 
             ax.clear()
             ax2.clear()
 
-            # Plot original on first y-axis
             bars1 = ax.bar(labels, stats, color="skyblue", label="Original")
-            # Plot no-guts on second y-axis
             bars2 = ax2.bar(labels, stats_no_guts, color="orange", alpha=0.5, label="Without Guts")
 
             ax.set_title("Stat Overview with Separate Guts-less Axis")
             ax.set_ylabel("Original Stats")
             ax2.set_ylabel("No Guts Stats")
 
-            # Find lowest non-Guts stat value from original
             non_guts_indices = [0, 1, 2, 4]
             non_guts_values = [stats[i] for i in non_guts_indices]
             min_non_guts_value = min(non_guts_values)
-
             ax2.set_ylim(bottom=min_non_guts_value)
 
             ax.legend(loc="upper left")
             ax2.legend(loc="upper right")
 
-            # Add text labels on original
             for bar, stat in zip(bars1, stats):
                 ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height(), str(stat),
                         ha='center', va='bottom', fontsize=9, fontweight='bold')
-
-            # Add text labels on no-guts
             for bar, stat in zip(bars2, stats_no_guts):
                 ax2.text(bar.get_x() + bar.get_width() / 2, bar.get_height(), str(stat),
                          ha='center', va='bottom', fontsize=8)
 
             plt.pause(0.1)
+            t4 = time.perf_counter()
 
+            loop_end = time.perf_counter()
+
+            # --- Print timings
+            print(f"Loop total: {(loop_end - loop_start)*1000:.1f} ms | "
+                  f"Screenshot: {(t1 - t0)*1000:.1f} ms | "
+                  f"Template: {(t2 - t1)*1000:.1f} ms | "
+                  f"OCR: {(t3 - t2)*1000:.1f} ms | "
+                  f"Plot: {(t4 - t3)*1000:.1f} ms")
 
         except KeyboardInterrupt:
             print("Stopped by user.")
