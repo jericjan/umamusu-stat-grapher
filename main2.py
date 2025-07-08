@@ -8,13 +8,11 @@ import win32gui
 import win32process
 import psutil
 import mss
-import time
 
 pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 
-process_name = "UmamusumePrettyDerby.exe"  # <-- Change this
+process_name = "UmamusumePrettyDerby.exe"
 
-# --- Find window handle by process name ---
 def get_hwnd_by_process_name(proc_name):
     hwnds = []
 
@@ -35,12 +33,12 @@ hwnd = get_hwnd_by_process_name(process_name)
 if hwnd is None:
     raise Exception(f"Window for process '{process_name}' not found!")
 
-# --- Get window rect ---
+# Get window rect
 left, top, right, bottom = win32gui.GetWindowRect(hwnd)
 width = right - left
 height = bottom - top
 
-# --- Load template once ---
+# Load template
 template = cv2.imread("template.png")
 if template is None:
     raise ValueError("Template image not found!")
@@ -48,7 +46,6 @@ if template is None:
 template_gray = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY)
 h, w = template_gray.shape
 
-# --- Define bounding boxes ---
 boxes = [
     (41, 27, 59, 26),    # Speed
     (137, 26, 57, 27),   # Stamina
@@ -58,20 +55,15 @@ boxes = [
 ]
 labels = ["Speed", "Stamina", "Power", "Guts", "Wit"]
 
-# --- Setup matplotlib ---
 plt.ion()
-fig, ax = plt.subplots(figsize=(8, 4))
-bars = ax.bar(labels, [0]*5, color="skyblue")
-ax.set_title("Stat Overview")
-ax.set_ylabel("Value")
+fig, ax = plt.subplots(figsize=(10, 5))
+ax2 = ax.twinx()  # Second y-axis
 
 saved_stats = [0, 0, 0, 0, 0]
 
-# --- Start loop ---
 with mss.mss() as sct:
     while True:
         try:
-            # Update window rect each time in case it moves
             left, top, right, bottom = win32gui.GetWindowRect(hwnd)
             width = right - left
             height = bottom - top
@@ -110,34 +102,50 @@ with mss.mss() as sct:
                     value = 0
                 stats.append(value)
 
-
             if any(x == 0 for x in stats) or stats == saved_stats:
                 plt.pause(1.0)
                 continue
-                
+
             saved_stats = stats
-            # Update plot
-            for bar, stat in zip(bars, stats):
-                bar.set_height(stat)
+
+            # Stats with Guts set to 0
+            stats_no_guts = stats.copy()
+            stats_no_guts[3] = 0
 
             ax.clear()
-            bars = ax.bar(labels, stats, color="skyblue")
-            ax.set_title("Stat Overview")
-            ax.set_ylabel("Value")
+            ax2.clear()
 
-            # Add text labels
-            for bar, stat in zip(bars, stats):
-                ax.text(
-                    bar.get_x() + bar.get_width() / 2,
-                    bar.get_height(),
-                    str(stat),
-                    ha='center',
-                    va='bottom',
-                    fontsize=10,
-                    fontweight='bold'
-                )
+            # Plot original on first y-axis
+            bars1 = ax.bar(labels, stats, color="skyblue", label="Original")
+            # Plot no-guts on second y-axis
+            bars2 = ax2.bar(labels, stats_no_guts, color="orange", alpha=0.5, label="Without Guts")
+
+            ax.set_title("Stat Overview with Separate Guts-less Axis")
+            ax.set_ylabel("Original Stats")
+            ax2.set_ylabel("No Guts Stats")
+
+            # Find lowest non-Guts stat value from original
+            non_guts_indices = [0, 1, 2, 4]
+            non_guts_values = [stats[i] for i in non_guts_indices]
+            min_non_guts_value = min(non_guts_values)
+
+            ax2.set_ylim(bottom=min_non_guts_value)
+
+            ax.legend(loc="upper left")
+            ax2.legend(loc="upper right")
+
+            # Add text labels on original
+            for bar, stat in zip(bars1, stats):
+                ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height(), str(stat),
+                        ha='center', va='bottom', fontsize=9, fontweight='bold')
+
+            # Add text labels on no-guts
+            for bar, stat in zip(bars2, stats_no_guts):
+                ax2.text(bar.get_x() + bar.get_width() / 2, bar.get_height(), str(stat),
+                         ha='center', va='bottom', fontsize=8)
 
             plt.pause(0.1)
+
 
         except KeyboardInterrupt:
             print("Stopped by user.")
