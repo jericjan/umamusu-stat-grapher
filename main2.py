@@ -101,7 +101,7 @@ with mss.mss() as sct:
             full_gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
             res = cv2.matchTemplate(full_gray, template_gray, cv2.TM_CCOEFF_NORMED)
             _, max_val, _, max_loc = cv2.minMaxLoc(res)            
-            if max_val < 0.8:
+            if max_val < 0.7:
                 plt.pause(1.0)
                 continue
             top_left = max_loc
@@ -137,7 +137,7 @@ with mss.mss() as sct:
             bars1 = ax.bar(labels, stats, color="skyblue", label="Original")
             bars2 = ax2.bar(labels, stats_no_guts, color="orange", alpha=0.5, label="Without Guts")
 
-            ax.set_title("Stat Overview with Separate Guts-less Axis")
+            ax.set_title("Umamusume Stats Graph")
             ax.set_ylabel("Original Stats")
             ax2.set_ylabel("No Guts Stats")
 
