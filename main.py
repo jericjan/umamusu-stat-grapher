@@ -1,29 +1,48 @@
 import cv2
 import pytesseract
-from PIL import Image
+import numpy as np
+from PIL import Image, ImageGrab
+from io import BytesIO
 
+# Set tesseract path if needed
 pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 
-img = cv2.imread("your_image.png")
-gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+# Grab image from clipboard
+clipboard_image = ImageGrab.grabclipboard()
+if clipboard_image is None:
+    raise ValueError("No image found in clipboard!")
 
-# You might need to tune these parameters
-_, thresh = cv2.threshold(gray, 150, 255, cv2.THRESH_BINARY_INV)
+# Convert PIL image to OpenCV format
+img_cv = cv2.cvtColor(np.array(clipboard_image), cv2.COLOR_RGB2BGR)
+
+# Convert to grayscale
+gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
+
+# Apply thresholding
+_, thresh = cv2.threshold(gray, 140, 255, cv2.THRESH_TOZERO)
 cv2.imwrite("processed.png", thresh)
 
-# Load the processed image
-image = Image.open("processed.png")
+# Convert back to PIL for pytesseract
+thresh_pil = Image.fromarray(thresh)
 
-# Optional: If the image is clean, you might not need to specify config, but it helps!
+# Save to BytesIO instead of disk
+buffer = BytesIO()
+thresh_pil.save(buffer, format="PNG")
+buffer.seek(0)
+
+# Re-open from BytesIO
+image_for_ocr = Image.open(buffer)
+
+# OCR config
 config = "--psm 6 -c tessedit_char_whitelist=0123456789"
 
 # Run OCR
-text = pytesseract.image_to_string(image, config=config)
+text = pytesseract.image_to_string(image_for_ocr, config=config)
 
-# Print raw result
+# Print raw OCR result
 print("Raw OCR result:", repr(text))
 
-# Post-process (optional): remove whitespace, split into lines
+# Post-process
 lines = [line.strip() for line in text.splitlines() if line.strip()]
 
 print("Parsed lines:", lines)
